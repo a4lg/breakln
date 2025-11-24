@@ -412,6 +412,14 @@ out3:
                 pathname, strerror(errno));
             ret = BREAKLN_EXIT_FAIL_SAFE;
         }
+
+        // Finalization: chown to the original owner (can fail)
+        if (fchown(fd2, fst.st_uid, fst.st_gid) < 0) {
+            fprintf(
+                stderr, "%s: (warning) Break link complete but failed to change its owner (%s).\n",
+                pathname, strerror(errno));
+            // Don't set error here.
+        }
     }
     close(fd2);
     if (ret == BREAKLN_EXIT_FAIL_UNSAFE) {
