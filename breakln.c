@@ -1,6 +1,6 @@
 /*
 
-    breaklink : Efficient hard link breaking utility
+    breakln : Efficient hard link breaking utility
 
     Copyright (C) 2025 Tsukasa OI.
 
