@@ -421,7 +421,9 @@ out3:
             // Don't set error here.
         }
     }
+
     close(fd2);
+
     if (ret == BREAKLN_EXIT_FAIL_UNSAFE) {
         // Attempt graceful recovery (from an unsafe failure).
         // Precondition:
