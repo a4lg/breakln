@@ -23,7 +23,7 @@
 #
 
 AC_PREREQ([2.70])
-AC_INIT([breakln], [0.1.0], [floss_zutils@irq.a4lg.com], [breakln], [https://github.com/a4lg/breakln])
+AC_INIT([breakln], [0.1.1], [floss_zutils@irq.a4lg.com], [breakln], [https://github.com/a4lg/breakln])
 AM_INIT_AUTOMAKE([foreign])
 AC_CONFIG_SRCDIR([breakln.c])
 AC_CONFIG_HEADERS([config.h])

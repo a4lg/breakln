@@ -319,7 +319,7 @@ int process_file(char* pathname)
     ret = BREAKLN_EXIT_FAIL_UNSAFE;
 
     // Create file with the same name as the original.
-    int fd2 = openat(dirfd, filename, O_WRONLY | O_CREAT, (mode_t)0600);
+    int fd2 = openat(dirfd, filename, O_WRONLY | O_CREAT | O_NOFOLLOW, (mode_t)0600);
     if (fd2 < 0) {
         fprintf(
             stderr, "%s (ino=%" PRIuMAX "): Failed to create destination without hard links (%s).\n",
