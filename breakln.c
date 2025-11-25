@@ -87,8 +87,8 @@ static int process_file(char* pathname)
     char* filename = basename(name2_base);
 
     // Open the directory.
-    int dirfd = open(filedir, O_RDONLY | O_DIRECTORY);
-    if (dirfd < 0) {
+    int fd_dir = open(filedir, O_RDONLY | O_DIRECTORY);
+    if (fd_dir < 0) {
         fprintf(
             stderr, "%s: Cannot open directory (%s).\n",
             filedir, strerror(errno));
@@ -96,7 +96,7 @@ static int process_file(char* pathname)
     }
 
     // Check if the file is opened and the metadata can be read.
-    int fd = openat(dirfd, filename, O_RDONLY | O_NOFOLLOW);
+    int fd = openat(fd_dir, filename, O_RDONLY | O_NOFOLLOW);
     struct stat fst;
     if (fd < 0) {
         fprintf(
@@ -135,7 +135,7 @@ static int process_file(char* pathname)
     critical_entered = true;
 
     // Remove the original file (path).
-    if (unlinkat(dirfd, filename, 0) < 0) {
+    if (unlinkat(fd_dir, filename, 0) < 0) {
         fprintf(
             stderr, "%s: Failed to \"remove\" the original file (%s).\n",
             pathname, strerror(errno));
@@ -146,7 +146,7 @@ static int process_file(char* pathname)
     ret = BREAKLN_EXIT_FAIL_UNSAFE;
 
     // Create file with the same name as the original.
-    int fd2 = openat(dirfd, filename, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, (mode_t)0600);
+    int fd2 = openat(fd_dir, filename, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, (mode_t)0600);
     if (fd2 < 0) {
         fprintf(
             stderr, "%s (ino=%" PRIuMAX "): Failed to create destination without hard links (%s).\n",
@@ -265,7 +265,7 @@ out3:
         }
 
         // First, remove the invalid file.
-        if (unlinkat(dirfd, filename, 0) < 0) {
+        if (unlinkat(fd_dir, filename, 0) < 0) {
             fprintf(
                 stderr, "%s (ino=%" PRIuMAX "): Failed to remove invalid file on graceful recovery (%s).\n",
                 pathname, fino, strerror(errno));
@@ -273,7 +273,7 @@ out3:
         }
 
         // Try to relink the original file
-        if (linkat(AT_FDCWD, procfd_name, dirfd, filename, AT_SYMLINK_FOLLOW) < 0) {
+        if (linkat(AT_FDCWD, procfd_name, fd_dir, filename, AT_SYMLINK_FOLLOW) < 0) {
             fprintf(
                 stderr, "%s (ino=%" PRIuMAX "): Failed to perform graceful recovery (%s).\n",
                 pathname, fino, strerror(errno));
@@ -289,7 +289,7 @@ out2:
     if (critical_entered)
         breakln_interrupt_leave();
 out1:
-    close(dirfd);
+    close(fd_dir);
 out0:
     return ret;
 }
