@@ -2,6 +2,9 @@
 
     breakln : Efficient hard link breaking utility
 
+    breakln.c
+    Main application
+
     Copyright (C) 2025 Tsukasa OI.
 
     Permission is hereby granted, free of charge, to any person obtaining a
@@ -26,7 +29,6 @@
 
 #include "config.h"
 
-#include <assert.h>
 #include <inttypes.h>
 #include <limits.h>
 #include <stdbool.h>
@@ -38,7 +40,6 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <libgen.h>
-#include <signal.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -46,196 +47,18 @@
 
 #include <linux/fs.h>
 
+// Implementation Utilities
+#include "breakln_impl/cmdline.h"
+#include "breakln_impl/pathbuf_dyn.h"
+#include "breakln_impl/signal_handler.h"
+
 #define BREAKLN_EXIT_OK 0
 #define BREAKLN_EXIT_FAIL_SAFE 1
 #define BREAKLN_EXIT_FAIL_UNSAFE 2
 
-/***
-    Dynamic Path Buffers
-
-    We avoid dynamic allocation of buffers as possible
-    (use static storage instead).
-    Still, there's a case where allocation will be needed.
-***/
-
-struct dyn_pathbuf {
-    // Dynamic buffer (if longer than PATH_MAX)
-    char* dyn;
-    // Allocated dynamic buffer size (in chars excluding trailing NUL)
-    size_t dyn_chars;
-    // Static buffer
-    char buf[PATH_MAX + 1];
-};
-
-static void
-dyn_pathbuf_init(struct dyn_pathbuf* buf)
-{
-    buf->dyn = NULL;
-    buf->dyn_chars = 0;
-    buf->buf[0] = '\0';
-}
-
-static char*
-dyn_pathbuf_strdup(struct dyn_pathbuf* buf, const char* pathname, size_t pathlen)
-{
-    if (buf->dyn && buf->dyn_chars >= pathlen) {
-        // Reuse existing allocated buffer (do not update dyn_chars).
-        strcpy(buf->dyn, pathname);
-        return buf->dyn;
-    } else if (pathlen <= PATH_MAX) {
-        // Use static buffer.
-        strcpy(buf->buf, pathname);
-        return buf->buf;
-    } else {
-        // Newly allocate buffer.
-        if (buf->dyn)
-            free(buf->dyn);
-        buf->dyn = strdup(pathname);
-        buf->dyn_chars = pathlen;
-        return buf->dyn;
-    }
-}
-
-static void
-dyn_pathbuf_free(struct dyn_pathbuf* buf)
-{
-    if (buf->dyn) {
-        free(buf->dyn);
-        buf->dyn = NULL;
-    }
-}
-
 static struct dyn_pathbuf storage_name1; // dirname
 static struct dyn_pathbuf storage_name2; // basename
 static char procfd_name[PATH_MAX + 1]; // graceful recovery (static only)
-
-/***
-    Command Line Parser
-***/
-
-static const char* cmdname = PACKAGE_NAME;
-
-static void fatal_navigate_to_help(void)
-{
-    fprintf(stderr, "Try '%s --help' for more information.\n", cmdname);
-    exit(1);
-}
-
-static void fatal_unknown_option(const char* option)
-{
-    fprintf(stderr, "%s: unrecognized option '%s'\n", cmdname, option);
-    fatal_navigate_to_help();
-}
-
-static char** files = NULL;
-static int files_count = 0;
-
-static void parse_cmdline(int argc, char** argv)
-{
-    bool is_help = false;
-    bool is_version = false;
-    if (argc > 0)
-        cmdname = argv[0];
-
-    for (argv++, argc--; argc > 0; argv++, argc--) {
-        char* opt = *argv;
-        if (opt[0] == '-') {
-            // opt matches /^-.*/.
-            if (opt[1] == '-') {
-                // Parse long options
-                char* optname = opt + 2;
-                if (*optname == '\0') {
-                    // -- : Break parser
-                    argv++;
-                    argc--;
-                    break;
-                } else if (strcmp(optname, "help") == 0) {
-                    // --help : Display help
-                    is_help = true;
-                } else if (strcmp(optname, "version") == 0) {
-                    // --version : Display version
-                    is_version = true;
-                } else {
-                    // Unknown long option
-                    fatal_unknown_option(opt);
-                }
-            } else {
-                // Parse short options : not yet implemented!
-                fatal_unknown_option(opt);
-            }
-        } else {
-            // opt does not start with a hyphen: consider as file name.
-            break;
-        }
-    }
-
-    // Process `--help` and `--version`
-    if (is_help) {
-        fprintf(
-            stderr,
-            "Usage: %s [OPTION...] [--] FILE...\n"
-            "Break hard links of regular FILE(s).\n"
-            "\n"
-            "\t--help     Display help\n"
-            "\t--version  Display version\n"
-            "\n"
-            "EXIT STATUS:\n"
-            "\t0  Success\n"
-            "\t1  Failure (but safe revert succeeded)\n"
-            "\t2  Failure (and safe revert failed)\n",
-            cmdname);
-    }
-    if (is_version) {
-        fputs(PACKAGE_NAME " version " PACKAGE_VERSION "\n"
-                           "\n"
-                           "Website: <" PACKAGE_URL ">\n",
-            stderr);
-    }
-    if (is_help || is_version)
-        exit(0);
-
-    // Process files list (error if empty)
-    files = argv;
-    files_count = argc;
-    if (files_count == 0) {
-        fprintf(stderr, "%s: missing operand\n", cmdname);
-        fatal_navigate_to_help();
-    }
-}
-
-/***
-    Break hard links (breakln command)
-***/
-
-// For graceful recovery on interruption and other handlings.
-static volatile sig_atomic_t breakln_interrupted = 0;
-static volatile sig_atomic_t breakln_signo = 0;
-static struct sigaction breakln_osa_i;
-static struct sigaction breakln_osa_t;
-
-static void breakln_interrupt_handler(int signo)
-{
-    breakln_signo = (sig_atomic_t)signo;
-    breakln_interrupted = 1;
-}
-
-static void breakln_interrupt_enter(void)
-{
-    struct sigaction sigact;
-    memset(&sigact, 0, sizeof(sigact));
-    sigact.sa_handler = breakln_interrupt_handler;
-    sigemptyset(&sigact.sa_mask);
-    sigaddset(&sigact.sa_mask, SIGINT);
-    sigaddset(&sigact.sa_mask, SIGTERM);
-    sigaction(SIGINT, &sigact, &breakln_osa_i);
-    sigaction(SIGTERM, &sigact, &breakln_osa_t);
-}
-
-static void breakln_interrupt_leave(void)
-{
-    sigaction(SIGINT, &breakln_osa_i, NULL);
-    sigaction(SIGTERM, &breakln_osa_t, NULL);
-}
 
 static int process_file(char* pathname)
 {

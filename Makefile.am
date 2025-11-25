@@ -24,4 +24,8 @@
 
 bin_PROGRAMS = breakln
 breakln_SOURCES = breakln.c
-EXTRA_DIST = README.md
+EXTRA_DIST = \
+    README.md \
+    breakln_impl/cmdline.h \
+    breakln_impl/pathbuf_dyn.h \
+    breakln_impl/signal_handler.h
