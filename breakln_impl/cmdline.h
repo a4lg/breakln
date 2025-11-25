@@ -32,23 +32,29 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Name of this command.
 static const char* cmdname = PACKAGE_NAME;
 
+// Display navigation to `--help` option then exit.
 static void fatal_navigate_to_help(void)
 {
     fprintf(stderr, "Try '%s --help' for more information.\n", cmdname);
     exit(1);
 }
 
+// Display unknown option error message then exit.
 static void fatal_unknown_option(const char* option)
 {
     fprintf(stderr, "%s: unrecognized option '%s'\n", cmdname, option);
     fatal_navigate_to_help();
 }
 
+// Array of input/output files (arguments)
 static char** files = NULL;
+// Count of `files`
 static int files_count = 0;
 
+// Parse command line arguments.
 void parse_cmdline(int argc, char** argv)
 {
     bool is_help = false;

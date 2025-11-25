@@ -49,6 +49,7 @@ struct dyn_pathbuf {
     char buf[PATH_MAX + 1];
 };
 
+// Initialize dynamic path buffer.
 static void
 dyn_pathbuf_init(struct dyn_pathbuf* buf)
 {
@@ -57,6 +58,7 @@ dyn_pathbuf_init(struct dyn_pathbuf* buf)
     buf->buf[0] = '\0';
 }
 
+// Perform `strdup` to a dynamic path buffer (allocate only when necessary).
 static char*
 dyn_pathbuf_strdup(struct dyn_pathbuf* buf, const char* pathname, size_t pathlen)
 {
@@ -78,6 +80,7 @@ dyn_pathbuf_strdup(struct dyn_pathbuf* buf, const char* pathname, size_t pathlen
     }
 }
 
+// Finalize (free) dynamic path buffer.
 static void
 dyn_pathbuf_free(struct dyn_pathbuf* buf)
 {

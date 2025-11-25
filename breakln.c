@@ -56,10 +56,14 @@
 #define BREAKLN_EXIT_FAIL_SAFE 1
 #define BREAKLN_EXIT_FAIL_UNSAFE 2
 
-static struct dyn_pathbuf storage_name1; // dirname
-static struct dyn_pathbuf storage_name2; // basename
-static char procfd_name[PATH_MAX + 1]; // graceful recovery (static only)
+// Dynamic path buffer for dirname
+static struct dyn_pathbuf storage_name1;
+// Dynamic path buffer for basename
+static struct dyn_pathbuf storage_name2;
+// Static path buffer for graceful recovery
+static char procfd_name[PATH_MAX + 1];
 
+// Process a file.
 static int process_file(char* pathname)
 {
     bool critical_entered = false;
