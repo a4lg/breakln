@@ -130,7 +130,7 @@ static void fatal_unknown_option(const char* option)
 static char** files = NULL;
 static int files_count = 0;
 
-void parse_cmdline(int argc, char** argv)
+static void parse_cmdline(int argc, char** argv)
 {
     bool is_help = false;
     bool is_version = false;
@@ -237,7 +237,7 @@ static void breakln_interrupt_leave(void)
     sigaction(SIGTERM, &breakln_osa_t, NULL);
 }
 
-int process_file(char* pathname)
+static int process_file(char* pathname)
 {
     bool critical_entered = false;
     int ret = BREAKLN_EXIT_FAIL_SAFE;
