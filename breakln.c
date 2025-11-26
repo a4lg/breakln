@@ -56,12 +56,13 @@
 #define BREAKLN_EXIT_FAIL_SAFE 1
 #define BREAKLN_EXIT_FAIL_UNSAFE 2
 
+// Minimum file system disruption mode: Attempts to relink the file path.
+#define BREAKLN_RELINK_ATTEMPTS 10
+
 // Dynamic path buffer for dirname
 static struct dyn_pathbuf storage_name1;
 // Dynamic path buffer for basename
 static struct dyn_pathbuf storage_name2;
-// Static path buffer for graceful recovery
-static char procfd_name[PATH_MAX + 1];
 
 // Currently processing: path name
 static char* pathname = NULL;
@@ -83,31 +84,19 @@ static int process_file_min_tmpfile(void)
 {
     int ret = BREAKLN_EXIT_FAIL_SAFE;
 
-    // Remove the original file (path).
-    if (unlinkat(fd_dir, filename, 0) < 0) {
-        fprintf(
-            stderr, "%s: Failed to \"remove\" the original file (%s).\n",
-            pathname, strerror(errno));
-        goto out0;
-    }
-
-    // From here, some operations are dangerous.
-    ret = BREAKLN_EXIT_FAIL_UNSAFE;
-
-    // Create file with the same name as the original.
-    int fd_out = openat(fd_dir, filename, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, (mode_t)0600);
+    // Create "temporary" file (going to be the output later).
+    int fd_out = openat(fd_dir, ".", O_WRONLY | O_TMPFILE, (mode_t)0600);
     if (fd_out < 0) {
         fprintf(
-            stderr, "%s (ino=%" PRIuMAX "): Failed to create destination without hard links (%s).\n",
-            pathname, fino, strerror(errno));
+            stderr, "%s: Failed to create destination without hard links (%s).\n",
+            pathname, strerror(errno));
         goto out0;
     }
 
     // Check if the original file is empty.
     if (stat_in.st_size == 0) {
         // Empty file and subsequent cloning operations not needed.
-        ret = BREAKLN_EXIT_OK;
-        goto out1;
+        goto do_replace;
     }
 
 #ifdef FICLONE
@@ -115,7 +104,7 @@ static int process_file_min_tmpfile(void)
     if (ioctl(fd_out, FICLONE, fd_in) >= 0) {
         // FICLONE succeeded!
         ret = BREAKLN_EXIT_OK;
-        goto out1;
+        goto do_replace;
     }
 #endif
 
@@ -135,16 +124,15 @@ static int process_file_min_tmpfile(void)
 
     // Interrupt
     if (breakln_interrupted) {
-        fprintf(stderr, "%s (ino=%" PRIuMAX "): Interrupted while processing.\n",
-            pathname, fino);
+        fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
         goto out1;
     }
 
     // Truncate (for partial failure of FICLONE).
     if (lseek(fd_out, 0, SEEK_SET) == -1 || ftruncate(fd_out, 0) < 0) {
         fprintf(
-            stderr, "%s (ino=%" PRIuMAX "): Failed to prepare regular file copy (%s).\n",
-            pathname, fino, strerror(errno));
+            stderr, "%s: Failed to prepare regular file copy (%s).\n",
+            pathname, strerror(errno));
         goto out1;
     }
 
@@ -154,8 +142,7 @@ static int process_file_min_tmpfile(void)
     do {
         // Interrupt
         if (breakln_interrupted) {
-            fprintf(stderr, "%s (ino=%" PRIuMAX "): Interrupted while processing.\n",
-                pathname, fino);
+            fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
             goto out1;
         }
 
@@ -170,15 +157,53 @@ static int process_file_min_tmpfile(void)
         chunk = copy_file_range(fd_in, NULL, fd_out, NULL, sz, 0);
         if (chunk < 0) {
             fprintf(
-                stderr, "%s (ino=%" PRIuMAX "): Failed to copy from the original file (%s).\n",
-                pathname, fino, strerror(errno));
+                stderr, "%s: Failed to copy from the original file (%s).\n",
+                pathname, strerror(errno));
             goto out1;
         }
         filesize -= (off_t)chunk;
     } while (filesize > 0 && chunk > 0);
 
-    // Finalization
+    // Remove then replace if possible.
+do_replace:
     ret = BREAKLN_EXIT_OK;
+    for (int i = 0; i < BREAKLN_RELINK_ATTEMPTS; i++) {
+        // Remove the original file (path).
+        if (unlinkat(fd_dir, filename, 0) < 0 && errno != ENOENT) {
+            fprintf(
+                stderr, "%s: Failed to \"remove\" the original file (%s).\n",
+                pathname, strerror(errno));
+            ret = BREAKLN_EXIT_FAIL_SAFE;
+            break;
+        }
+
+        // Relink to the original path (go to finalization on success).
+        if (linkat(fd_out, "", fd_dir, filename, AT_EMPTY_PATH) == 0)
+            goto out1;
+
+        // Do not retry if an existing entry does not exist.
+        if (errno != EEXIST) {
+            fprintf(
+                stderr, "%s (ino=%" PRIuMAX "): Failed to create destination without hard links (%s).\n",
+                pathname, fino, strerror(errno));
+            ret = BREAKLN_EXIT_FAIL_UNSAFE;
+            break;
+        }
+
+        // Retry if an existing entry does exist,
+        // expecting that the file is removed soon.
+    }
+
+    // If ret is a success, that means it failed to relink
+    // (despite seveal attempts) and errno is EEXIST.
+    if (ret == BREAKLN_EXIT_OK) {
+        fprintf(
+            stderr, "%s (ino=%" PRIuMAX "): Failed to create destination without hard links (%s).\n",
+            pathname, fino, strerror(EEXIST));
+        ret = BREAKLN_EXIT_FAIL_UNSAFE;
+    }
+
+    // Finalization
 out1:
     if (ret == BREAKLN_EXIT_OK) {
         // Finalization: chmod to the original mode
@@ -197,42 +222,7 @@ out1:
             // Don't set error here.
         }
     }
-
     close(fd_out);
-
-    if (ret == BREAKLN_EXIT_FAIL_UNSAFE) {
-        // Attempt graceful recovery (from an unsafe failure).
-        // Precondition:
-        // If we enter here, we have a file with the same name.
-        int sz = snprintf(procfd_name, PATH_MAX + 1, "/proc/self/fd/%d", fd_in);
-        if (sz > PATH_MAX) {
-            // Cannot format /proc/self/fd/%d (nearly impossible to happen).
-            fprintf(
-                stderr, "%s (ino=%" PRIuMAX "): Cannot format path for graceful recovery (%s).\n",
-                pathname, fino, strerror(errno));
-            goto out0;
-        }
-
-        // First, remove the invalid file.
-        if (unlinkat(fd_dir, filename, 0) < 0) {
-            fprintf(
-                stderr, "%s (ino=%" PRIuMAX "): Failed to remove invalid file on graceful recovery (%s).\n",
-                pathname, fino, strerror(errno));
-            goto out0;
-        }
-
-        // Try to relink the original file
-        if (linkat(AT_FDCWD, procfd_name, fd_dir, filename, AT_SYMLINK_FOLLOW) < 0) {
-            fprintf(
-                stderr, "%s (ino=%" PRIuMAX "): Failed to perform graceful recovery (%s).\n",
-                pathname, fino, strerror(errno));
-            goto out0;
-        }
-
-        // Now, we have failed to break a hard link
-        // but at least succeeded to revert the state.
-        ret = BREAKLN_EXIT_FAIL_SAFE;
-    }
 out0:
     return ret;
 }
