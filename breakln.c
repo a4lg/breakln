@@ -330,7 +330,7 @@ int main(int argc, char** argv)
         if (ret != BREAKLN_EXIT_OK)
             break;
         if (breakln_interrupted) {
-            if (i + 1 != files_count) {
+            if (i + 1 < files_count) {
                 fprintf(stderr, "%s: Interrupted before handling this.\n", files[i + 1]);
                 ret = 0x80 + (int)breakln_signo;
             }
