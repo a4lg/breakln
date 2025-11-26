@@ -63,110 +63,59 @@ static struct dyn_pathbuf storage_name2;
 // Static path buffer for graceful recovery
 static char procfd_name[PATH_MAX + 1];
 
-// Process a file.
-static int process_file(char* pathname)
+// Currently processing: path name
+static char* pathname = NULL;
+// Currently processing: directory name
+static char* filedir = NULL;
+// Currently processing: file name
+static char* filename = NULL;
+// Currently processing: directory handle
+static int fd_dir = -1;
+// Currently processing: input file handle
+static int fd_in = -1;
+// Currently processing: file stat
+static struct stat stat_in;
+// Currently processing: file inode number
+static uintmax_t fino;
+
+// Process a file: using minimum file system disruption mode.
+static int process_file_min_tmpfile(void)
 {
-    bool critical_entered = false;
     int ret = BREAKLN_EXIT_FAIL_SAFE;
-    size_t pathlen = strlen(pathname);
-
-    // Preprocess paths
-    if (pathlen > 0 && pathname[pathlen - 1] == '/') {
-        // Trailing slash meaning a directory
-        // (and handling with basename will not work correctly).
-        fprintf(stderr, "%s: File name cannot end with trailing slash.\n", pathname);
-        goto out0;
-    }
-    char* name1_base = dyn_pathbuf_strdup(&storage_name1, pathname, pathlen);
-    char* name2_base = dyn_pathbuf_strdup(&storage_name2, pathname, pathlen);
-    if (!name1_base || !name2_base) {
-        fprintf(stderr, "%s: Failed to allocate memory to process paths.\n", cmdname);
-        goto out0;
-    }
-    char* filedir = dirname(name1_base);
-    char* filename = basename(name2_base);
-
-    // Open the directory.
-    int fd_dir = open(filedir, O_RDONLY | O_DIRECTORY);
-    if (fd_dir < 0) {
-        fprintf(
-            stderr, "%s: Cannot open directory (%s).\n",
-            filedir, strerror(errno));
-        goto out0;
-    }
-
-    // Check if the file is opened and the metadata can be read.
-    int fd = openat(fd_dir, filename, O_RDONLY | O_NOFOLLOW);
-    struct stat fst;
-    if (fd < 0) {
-        fprintf(
-            stderr, "%s: %s.\n", pathname,
-            errno == ELOOP
-                ? "Symbolic link is not supported"
-                : strerror(errno));
-        goto out1;
-    }
-    if (fstat(fd, &fst) < 0) {
-        fprintf(
-            stderr, "%s: %s.\n", pathname,
-            strerror(errno));
-        goto out2;
-    }
-    uintmax_t fino = (uintmax_t)fst.st_ino;
-
-    // Only regular files are supported.
-    if (!S_ISREG(fst.st_mode)) {
-        fprintf(stderr, "%s: Only regular files are supported.\n", pathname);
-        goto out2;
-    }
-
-    // Skip if there's no need to break hard links.
-    if (fst.st_nlink <= 1) {
-        ret = BREAKLN_EXIT_OK;
-        goto out2;
-    }
-
-    /*
-        Operating Mode: Minimum File System Disruption.
-    */
-
-    // Enter the critical section.
-    breakln_interrupt_enter();
-    critical_entered = true;
 
     // Remove the original file (path).
     if (unlinkat(fd_dir, filename, 0) < 0) {
         fprintf(
             stderr, "%s: Failed to \"remove\" the original file (%s).\n",
             pathname, strerror(errno));
-        goto out2;
+        goto out0;
     }
 
     // From here, some operations are dangerous.
     ret = BREAKLN_EXIT_FAIL_UNSAFE;
 
     // Create file with the same name as the original.
-    int fd2 = openat(fd_dir, filename, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, (mode_t)0600);
-    if (fd2 < 0) {
+    int fd_out = openat(fd_dir, filename, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, (mode_t)0600);
+    if (fd_out < 0) {
         fprintf(
             stderr, "%s (ino=%" PRIuMAX "): Failed to create destination without hard links (%s).\n",
             pathname, fino, strerror(errno));
-        goto out2;
+        goto out0;
     }
 
     // Check if the original file is empty.
-    if (fst.st_size == 0) {
+    if (stat_in.st_size == 0) {
         // Empty file and subsequent cloning operations not needed.
         ret = BREAKLN_EXIT_OK;
-        goto out3;
+        goto out1;
     }
 
 #ifdef FICLONE
     // Clone the file as possible.
-    if (ioctl(fd2, FICLONE, fd) >= 0) {
+    if (ioctl(fd_out, FICLONE, fd_in) >= 0) {
         // FICLONE succeeded!
         ret = BREAKLN_EXIT_OK;
-        goto out3;
+        goto out1;
     }
 #endif
 
@@ -188,26 +137,26 @@ static int process_file(char* pathname)
     if (breakln_interrupted) {
         fprintf(stderr, "%s (ino=%" PRIuMAX "): Interrupted while processing.\n",
             pathname, fino);
-        goto out3;
+        goto out1;
     }
 
     // Truncate (for partial failure of FICLONE).
-    if (lseek(fd2, 0, SEEK_SET) == -1 || ftruncate(fd2, 0) < 0) {
+    if (lseek(fd_out, 0, SEEK_SET) == -1 || ftruncate(fd_out, 0) < 0) {
         fprintf(
             stderr, "%s (ino=%" PRIuMAX "): Failed to prepare regular file copy (%s).\n",
             pathname, fino, strerror(errno));
-        goto out3;
+        goto out1;
     }
 
     // Copy file ranges.
-    off_t filesize = fst.st_size;
+    off_t filesize = stat_in.st_size;
     ssize_t chunk;
     do {
         // Interrupt
         if (breakln_interrupted) {
             fprintf(stderr, "%s (ino=%" PRIuMAX "): Interrupted while processing.\n",
                 pathname, fino);
-            goto out3;
+            goto out1;
         }
 
         /*
@@ -218,22 +167,22 @@ static int process_file(char* pathname)
         size_t sz = filesize >= max_chunk_size
             ? max_chunk_size
             : (size_t)filesize;
-        chunk = copy_file_range(fd, NULL, fd2, NULL, sz, 0);
+        chunk = copy_file_range(fd_in, NULL, fd_out, NULL, sz, 0);
         if (chunk < 0) {
             fprintf(
                 stderr, "%s (ino=%" PRIuMAX "): Failed to copy from the original file (%s).\n",
                 pathname, fino, strerror(errno));
-            goto out3;
+            goto out1;
         }
         filesize -= (off_t)chunk;
     } while (filesize > 0 && chunk > 0);
 
     // Finalization
     ret = BREAKLN_EXIT_OK;
-out3:
+out1:
     if (ret == BREAKLN_EXIT_OK) {
         // Finalization: chmod to the original mode
-        if (fchmod(fd2, fst.st_mode & ~(mode_t)S_IFMT) < 0) {
+        if (fchmod(fd_out, stat_in.st_mode & ~(mode_t)S_IFMT) < 0) {
             fprintf(
                 stderr, "%s: Break link complete but failed to restore permission flags (%s).\n",
                 pathname, strerror(errno));
@@ -241,7 +190,7 @@ out3:
         }
 
         // Finalization: chown to the original owner (can fail)
-        if (fchown(fd2, fst.st_uid, fst.st_gid) < 0) {
+        if (fchown(fd_out, stat_in.st_uid, stat_in.st_gid) < 0) {
             fprintf(
                 stderr, "%s: (warning) Break link complete but failed to change its owner (%s).\n",
                 pathname, strerror(errno));
@@ -249,19 +198,19 @@ out3:
         }
     }
 
-    close(fd2);
+    close(fd_out);
 
     if (ret == BREAKLN_EXIT_FAIL_UNSAFE) {
         // Attempt graceful recovery (from an unsafe failure).
         // Precondition:
         // If we enter here, we have a file with the same name.
-        int sz = snprintf(procfd_name, PATH_MAX + 1, "/proc/self/fd/%d", fd);
+        int sz = snprintf(procfd_name, PATH_MAX + 1, "/proc/self/fd/%d", fd_in);
         if (sz > PATH_MAX) {
             // Cannot format /proc/self/fd/%d (nearly impossible to happen).
             fprintf(
                 stderr, "%s (ino=%" PRIuMAX "): Cannot format path for graceful recovery (%s).\n",
                 pathname, fino, strerror(errno));
-            goto out2;
+            goto out0;
         }
 
         // First, remove the invalid file.
@@ -269,7 +218,7 @@ out3:
             fprintf(
                 stderr, "%s (ino=%" PRIuMAX "): Failed to remove invalid file on graceful recovery (%s).\n",
                 pathname, fino, strerror(errno));
-            goto out2;
+            goto out0;
         }
 
         // Try to relink the original file
@@ -277,17 +226,84 @@ out3:
             fprintf(
                 stderr, "%s (ino=%" PRIuMAX "): Failed to perform graceful recovery (%s).\n",
                 pathname, fino, strerror(errno));
-            goto out2;
+            goto out0;
         }
 
         // Now, we have failed to break a hard link
         // but at least succeeded to revert the state.
         ret = BREAKLN_EXIT_FAIL_SAFE;
     }
+out0:
+    return ret;
+}
+
+// Process a file.
+static int process_file(char* pathname_inout)
+{
+    int ret = BREAKLN_EXIT_FAIL_SAFE;
+
+    // Preprocess paths
+    pathname = pathname_inout;
+    size_t pathlen = strlen(pathname);
+    if (pathlen > 0 && pathname[pathlen - 1] == '/') {
+        // Trailing slash meaning a directory
+        // (and handling with basename will not work correctly).
+        fprintf(stderr, "%s: File name cannot end with trailing slash.\n", pathname);
+        goto out0;
+    }
+    char* name1_base = dyn_pathbuf_strdup(&storage_name1, pathname, pathlen);
+    char* name2_base = dyn_pathbuf_strdup(&storage_name2, pathname, pathlen);
+    if (!name1_base || !name2_base) {
+        fprintf(stderr, "%s: Failed to allocate memory to process paths.\n", cmdname);
+        goto out0;
+    }
+    filedir = dirname(name1_base);
+    filename = basename(name2_base);
+
+    // Open the directory.
+    fd_dir = open(filedir, O_RDONLY | O_DIRECTORY);
+    if (fd_dir < 0) {
+        fprintf(
+            stderr, "%s: Cannot open directory (%s).\n",
+            filedir, strerror(errno));
+        goto out0;
+    }
+
+    // Check if the file is opened and the metadata can be read.
+    fd_in = openat(fd_dir, filename, O_RDONLY | O_NOFOLLOW);
+    if (fd_in < 0) {
+        fprintf(
+            stderr, "%s: %s.\n", pathname,
+            errno == ELOOP
+                ? "Symbolic link is not supported"
+                : strerror(errno));
+        goto out1;
+    }
+    if (fstat(fd_in, &stat_in) < 0) {
+        fprintf(
+            stderr, "%s: %s.\n", pathname,
+            strerror(errno));
+        goto out2;
+    }
+    fino = (uintmax_t)stat_in.st_ino;
+
+    // Only regular files are supported.
+    if (!S_ISREG(stat_in.st_mode)) {
+        fprintf(stderr, "%s: Only regular files are supported.\n", pathname);
+        goto out2;
+    }
+
+    // Skip if there's no need to break hard links.
+    if (stat_in.st_nlink <= 1) {
+        ret = BREAKLN_EXIT_OK;
+        goto out2;
+    }
+
+    breakln_interrupt_enter();
+    ret = process_file_min_tmpfile();
+    breakln_interrupt_leave();
 out2:
-    close(fd);
-    if (critical_entered)
-        breakln_interrupt_leave();
+    close(fd_in);
 out1:
     close(fd_dir);
 out0:
