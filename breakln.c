@@ -60,7 +60,7 @@
 // Minimum file system disruption mode: Attempts to relink the file path.
 #define BREAKLN_RELINK_ATTEMPTS 10
 // Minimum file system disruption mode: Wait between relink attempts.
-#define BREAKLN_RELINK_WAIT_NS (10 * 1000 * 1000ull) // 10ms
+#define BREAKLN_RELINK_WAIT_NS (1 * 1000 * 1000ull) // 1ms
 
 // Dynamic path buffer for dirname
 static struct dyn_pathbuf storage_name1;
