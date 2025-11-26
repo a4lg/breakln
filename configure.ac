@@ -36,11 +36,11 @@ AC_DEFINE([_FILE_OFFSET_BITS], [64], [Large file support])
 AC_PROG_CC
 AS_IF([test "x$ac_cv_proc_cc_c11" = xno], [AC_MSG_ERROR([C compiler must support C11.])])
 
-AC_CHECK_HEADERS([fcntl.h libgen.h linux/fs.h],, [
+AC_CHECK_HEADERS([fcntl.h libgen.h time.h linux/fs.h],, [
 AC_MSG_ERROR([required header file(s) not found.])
 ])
 
-AC_CHECK_FUNCS([openat dirname copy_file_range],, [
+AC_CHECK_FUNCS([openat dirname copy_file_range nanosleep],, [
 AC_MSG_ERROR([required function(s) not found.])
 ])
 

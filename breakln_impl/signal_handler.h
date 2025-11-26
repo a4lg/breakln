@@ -33,7 +33,7 @@
 
 // For graceful recovery on interruption and other handlings.
 static volatile sig_atomic_t breakln_interrupted = 0;
-static volatile sig_atomic_t breakln_signo = 0;
+static volatile sig_atomic_t breakln_signo = SIGINT;
 static struct sigaction breakln_orig_action_int;
 static struct sigaction breakln_orig_action_term;
 

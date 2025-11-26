@@ -43,6 +43,7 @@
 #include <sys/ioctl.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <time.h>
 #include <unistd.h>
 
 #include <linux/fs.h>
@@ -58,6 +59,8 @@
 
 // Minimum file system disruption mode: Attempts to relink the file path.
 #define BREAKLN_RELINK_ATTEMPTS 10
+// Minimum file system disruption mode: Wait between relink attempts.
+#define BREAKLN_RELINK_WAIT_NS (10 * 1000 * 1000ull) // 10ms
 
 // Dynamic path buffer for dirname
 static struct dyn_pathbuf storage_name1;
@@ -168,6 +171,13 @@ static int process_file_min_tmpfile(void)
 do_replace:
     ret = BREAKLN_EXIT_OK;
     for (int i = 0; i < BREAKLN_RELINK_ATTEMPTS; i++) {
+        // Interrupt
+        if (breakln_interrupted) {
+            fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
+            ret = BREAKLN_EXIT_FAIL_SAFE;
+            goto out1;
+        }
+
         // Remove the original file (path).
         if (unlinkat(fd_dir, filename, 0) < 0 && errno != ENOENT) {
             fprintf(
@@ -192,6 +202,15 @@ do_replace:
 
         // Retry if an existing entry does exist,
         // expecting that the file is removed soon.
+        if (i + 1 < BREAKLN_RELINK_ATTEMPTS) {
+            const unsigned long long NS_TO_S = 1000 * 1000 * 1000ull;
+            struct timespec retry_timer = {
+                .tv_sec = (time_t)(BREAKLN_RELINK_WAIT_NS / NS_TO_S),
+                .tv_nsec = (long)(BREAKLN_RELINK_WAIT_NS % NS_TO_S)
+            };
+            if (nanosleep(&retry_timer, NULL) < 0 && errno == EINTR)
+                breakln_interrupted = 1;
+        }
     }
 
     // If ret is a success, that means it failed to relink
