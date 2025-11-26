@@ -116,8 +116,8 @@ static int process_file_min_tmpfile(void)
     {
         // Align to the page size if possible.
         long val = sysconf(_SC_PAGESIZE);
-        if (val > 0) {
-            size_t pagesize = val;
+        if (val > 0 && val <= SIZE_MAX) {
+            size_t pagesize = (size_t)val;
             max_chunk_size = max_chunk_size / pagesize * pagesize;
         }
     }
