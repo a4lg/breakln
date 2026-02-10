@@ -142,7 +142,7 @@ static int process_file_min_tmpfile(void)
     // Copy file ranges.
     off_t filesize = stat_in.st_size;
     ssize_t chunk;
-    do {
+    while (filesize) {
         // Break if interrupted.
         if (breakln_interrupted) {
             fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
@@ -165,7 +165,11 @@ static int process_file_min_tmpfile(void)
             goto out1;
         }
         filesize -= (off_t)chunk;
-    } while (filesize > 0 && chunk > 0);
+
+        // Zero chunk value means that the file has shortened while processing.
+        if (chunk == 0)
+            break;
+    }
 
     // Remove then replace if possible.
 do_replace:
