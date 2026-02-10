@@ -123,6 +123,9 @@ static int process_file_min_tmpfile(void)
             size_t pagesize = (size_t)val;
             max_chunk_size = max_chunk_size / pagesize * pagesize;
         }
+        // Escape hatch if sysconf is completely broken.
+        if (max_chunk_size < 4096)
+            max_chunk_size = 4096;
     }
 
     // Break if interrupted.
