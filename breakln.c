@@ -310,7 +310,10 @@ static int process_file(char* pathname_inout)
     }
 
     // Process a file in the context with custom signal handlers.
-    breakln_interrupt_enter();
+    if (!breakln_interrupt_enter()) {
+        fprintf(stderr, "%s: Cannot set trap handlers while processing.\n", filename);
+        goto out2;
+    }
     ret = process_file_min_tmpfile();
     breakln_interrupt_leave();
 out2:

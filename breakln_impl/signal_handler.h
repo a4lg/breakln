@@ -27,6 +27,7 @@
 
 */
 
+#include <stdbool.h>
 #include <string.h>
 
 #include <signal.h>
@@ -36,6 +37,7 @@ static volatile sig_atomic_t breakln_interrupted = 0;
 static volatile sig_atomic_t breakln_signo = SIGINT;
 static struct sigaction breakln_orig_action_int;
 static struct sigaction breakln_orig_action_term;
+static bool breakln_is_interrupt_context = false;
 
 static void breakln_interrupt_handler(int signo)
 {
@@ -43,20 +45,31 @@ static void breakln_interrupt_handler(int signo)
     breakln_interrupted = 1;
 }
 
-static void breakln_interrupt_enter(void)
+static bool breakln_interrupt_enter(void)
 {
-    struct sigaction sigact;
-    memset(&sigact, 0, sizeof(sigact));
+    struct sigaction sigact = {};
     sigact.sa_handler = breakln_interrupt_handler;
-    sigemptyset(&sigact.sa_mask);
-    sigaddset(&sigact.sa_mask, SIGINT);
-    sigaddset(&sigact.sa_mask, SIGTERM);
-    sigaction(SIGINT, &sigact, &breakln_orig_action_int);
-    sigaction(SIGTERM, &sigact, &breakln_orig_action_term);
+    if (sigemptyset(&sigact.sa_mask) < 0
+        || sigaddset(&sigact.sa_mask, SIGINT) < 0
+        || sigaddset(&sigact.sa_mask, SIGTERM) < 0)
+        return false;
+    if (sigaction(SIGINT, &sigact, &breakln_orig_action_int) < 0)
+        return false;
+    if (sigaction(SIGTERM, &sigact, &breakln_orig_action_term) < 0) {
+        // sigaction can fail but we don't care that much in this path.
+        sigaction(SIGINT, &breakln_orig_action_int, NULL);
+        return false;
+    }
+    breakln_is_interrupt_context = true;
+    return true;
 }
 
 static void breakln_interrupt_leave(void)
 {
+    if (!breakln_is_interrupt_context)
+        return;
+    // sigaction can fail but we don't care that much in this path.
     sigaction(SIGINT, &breakln_orig_action_int, NULL);
     sigaction(SIGTERM, &breakln_orig_action_term, NULL);
+    breakln_is_interrupt_context = false;
 }
