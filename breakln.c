@@ -125,7 +125,7 @@ static int process_file_min_tmpfile(void)
         }
     }
 
-    // Interrupt
+    // Break if interrupted.
     if (breakln_interrupted) {
         fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
         goto out1;
@@ -143,7 +143,7 @@ static int process_file_min_tmpfile(void)
     off_t filesize = stat_in.st_size;
     ssize_t chunk;
     do {
-        // Interrupt
+        // Break if interrupted.
         if (breakln_interrupted) {
             fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
             goto out1;
@@ -171,7 +171,7 @@ static int process_file_min_tmpfile(void)
 do_replace:
     ret = BREAKLN_EXIT_OK;
     for (int i = 0; i < BREAKLN_RELINK_ATTEMPTS; i++) {
-        // Interrupt
+        // Break if interrupted.
         if (breakln_interrupted) {
             fprintf(stderr, "%s: Interrupted while processing.\n", pathname);
             ret = BREAKLN_EXIT_FAIL_SAFE;
@@ -208,6 +208,7 @@ do_replace:
                 .tv_sec = (time_t)(BREAKLN_RELINK_WAIT_NS / NS_TO_S),
                 .tv_nsec = (long)(BREAKLN_RELINK_WAIT_NS % NS_TO_S)
             };
+            // If nanosleep is failed with EINTR, we are interrupted.
             if (nanosleep(&retry_timer, NULL) < 0 && errno == EINTR)
                 breakln_interrupted = 1;
         }
@@ -225,7 +226,7 @@ do_replace:
     // Finalization
 out1:
     if (ret == BREAKLN_EXIT_OK) {
-        // Finalization: chmod to the original mode
+        // Finalization: chmod to the original mode.
         if (fchmod(fd_out, stat_in.st_mode & ~(mode_t)S_IFMT) < 0) {
             fprintf(
                 stderr, "%s: Break link complete but failed to restore permission flags (%s).\n",
@@ -233,7 +234,7 @@ out1:
             ret = BREAKLN_EXIT_FAIL_SAFE;
         }
 
-        // Finalization: chown to the original owner (can fail)
+        // Finalization: chown to the original owner (can fail).
         if (fchown(fd_out, stat_in.st_uid, stat_in.st_gid) < 0) {
             fprintf(
                 stderr, "%s: (warning) Break link complete but failed to change its owner (%s).\n",
@@ -251,7 +252,7 @@ static int process_file(char* pathname_inout)
 {
     int ret = BREAKLN_EXIT_FAIL_SAFE;
 
-    // Preprocess paths
+    // Preprocess paths.
     pathname = pathname_inout;
     size_t pathlen = strlen(pathname);
     if (pathlen > 0 && pathname[pathlen - 1] == '/') {
@@ -308,6 +309,7 @@ static int process_file(char* pathname_inout)
         goto out2;
     }
 
+    // Process a file in the context with custom signal handlers.
     breakln_interrupt_enter();
     ret = process_file_min_tmpfile();
     breakln_interrupt_leave();
