@@ -106,7 +106,7 @@ void parse_cmdline(int argc, char** argv)
             "\n"
             "EXIT STATUS:\n"
             "\t0  Success\n"
-            "\t1  Failure (but safe revert succeeded)\n"
+            "\t1  Failure (but mostly complete or safe revert succeeded)\n"
             "\t2  Failure (and safe revert failed)\n",
             cmdname);
     }

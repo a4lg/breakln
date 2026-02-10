@@ -85,8 +85,9 @@ unless the program is interrupted by signals.
     Successful completion.
 *   `1`  
     Unsuccessful completion  
-    (but the operation is safely reverted to the state
-    before executing this command).
+    (but the operation is either safely reverted to the state
+    before executing this command or mostly completed except setting
+    the same permission flags as the original file, not temporary`0600`).
 *   `2`  
     Unsuccessful and *unsafe* completion  
     (breaking hard link is failed *and* the input/output file is lost or
